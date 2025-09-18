@@ -77,9 +77,11 @@ export function Dashboard() {
           <EngineControls
             isRunning={isRunning}
             onToggleEngine={toggleEngine}
-            onConnectWallet={connectWallet}
+            onDeployContract={deployContract}
             walletConnected={walletConnected}
             walletAddress={walletAddress}
+            contractDeployed={contractDeployed}
+            deployedContract={deployedContract}
           />
 
           {/* Tabbed Content */}

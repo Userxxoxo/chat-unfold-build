@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
 
 // Types
 export interface ArbitrageOpportunity {
@@ -29,12 +30,14 @@ export interface EngineState {
   walletConnected: boolean;
   walletAddress?: string;
   deployedContract?: string;
+  contractDeployed: boolean;
   totalProfits: number;
   dexCount: number;
   scanInterval: number;
   opportunities: ArbitrageOpportunity[];
   protocols: DexProtocol[];
   isExecuting: boolean;
+  isDeploying: boolean;
 }
 
 const MOCK_PROTOCOLS: DexProtocol[] = [
@@ -178,49 +181,100 @@ const MOCK_PROTOCOLS: DexProtocol[] = [
 
 export function useArbitrageEngine(): EngineState & {
   toggleEngine: () => void;
-  connectWallet: () => Promise<void>;
+  deployContract: () => Promise<void>;
   executeOpportunity: (opportunity: ArbitrageOpportunity) => Promise<void>;
 } {
   const [state, setState] = useState<EngineState>({
     isRunning: false,
-    walletConnected: false,
+    walletConnected: true, // Always connected via private key
+    contractDeployed: false,
     totalProfits: 0.0000,
     dexCount: 17,
     scanInterval: 20,
     opportunities: [],
     protocols: MOCK_PROTOCOLS,
     isExecuting: false,
+    isDeploying: false,
   });
 
-  // Mock wallet connection
-  const connectWallet = useCallback(async () => {
+  // Get wallet info from private key
+  const initializeWallet = useCallback(async () => {
     try {
-      // Simulate MetaMask connection
-      toast.info("Connecting to MetaMask...");
-      
-      // Mock delay
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      
-      const mockAddress = "0x742d35Cc6634C0532925a3b8D82a3e7F8D8B4e05";
-      const mockContract = "0x1234567890abcdef1234567890abcdef12345678";
-      
+      const { data, error } = await supabase.functions.invoke('arbitrage-engine', {
+        body: { action: 'get_wallet_balance' }
+      });
+
+      if (error) {
+        console.error('Error getting wallet info:', error);
+        return;
+      }
+
       setState(prev => ({
         ...prev,
-        walletConnected: true,
-        walletAddress: mockAddress,
-        deployedContract: mockContract
+        walletAddress: data.address
       }));
-      
-      toast.success("Wallet connected successfully!");
     } catch (error) {
-      toast.error("Failed to connect wallet");
+      console.error('Failed to initialize wallet:', error);
+    }
+  }, []);
+
+  // Deploy arbitrage contract
+  const deployContract = useCallback(async () => {
+    setState(prev => ({ ...prev, isDeploying: true }));
+    
+    try {
+      toast.info("Estimating deployment costs...");
+      
+      // Get cost estimate
+      const { data: costData, error: costError } = await supabase.functions.invoke('deploy-contract', {
+        body: { action: 'estimate' }
+      });
+
+      if (costError) {
+        throw new Error(costError.message);
+      }
+
+      // Show cost confirmation
+      const confirmDeploy = confirm(
+        `Contract Deployment Cost:\n` +
+        `Gas: ${costData.cost.estimatedCost} ETH (~$${costData.cost.estimatedCostUSD})\n` +
+        `Proceed with deployment?`
+      );
+
+      if (!confirmDeploy) {
+        setState(prev => ({ ...prev, isDeploying: false }));
+        return;
+      }
+
+      toast.info("Deploying arbitrage contract...");
+
+      const { data, error } = await supabase.functions.invoke('deploy-contract', {
+        body: { action: 'deploy' }
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      setState(prev => ({
+        ...prev,
+        contractDeployed: true,
+        deployedContract: data.contractAddress,
+        walletAddress: data.walletAddress,
+        isDeploying: false
+      }));
+
+      toast.success(`Contract deployed at ${data.contractAddress.substring(0, 8)}...`);
+    } catch (error) {
+      setState(prev => ({ ...prev, isDeploying: false }));
+      toast.error("Deployment failed: " + (error as Error).message);
     }
   }, []);
 
   // Toggle engine
   const toggleEngine = useCallback(() => {
-    if (!state.walletConnected) {
-      toast.error("Please connect your wallet first");
+    if (!state.contractDeployed) {
+      toast.error("Please deploy contract first");
       return;
     }
 
@@ -228,96 +282,103 @@ export function useArbitrageEngine(): EngineState & {
       ...prev,
       isRunning: !prev.isRunning
     }));
-  }, [state.walletConnected]);
+
+    toast.success(state.isRunning ? "Engine paused" : "Engine resumed - scanning for opportunities...");
+  }, [state.contractDeployed, state.isRunning]);
 
   // Execute arbitrage opportunity
   const executeOpportunity = useCallback(async (opportunity: ArbitrageOpportunity) => {
+    if (!state.deployedContract) {
+      toast.error("No contract deployed");
+      return;
+    }
+
     setState(prev => ({ ...prev, isExecuting: true }));
     
     try {
-      toast.info(`Executing flashloan for ${opportunity.tokenPair}...`);
+      toast.info(`Executing arbitrage for ${opportunity.tokenPair}...`);
       
-      // Simulate execution time
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      // Simulate successful execution with profit
-      const profit = opportunity.profitETH * (0.8 + Math.random() * 0.4); // 80-120% of estimated
+      const { data, error } = await supabase.functions.invoke('arbitrage-engine', {
+        body: {
+          action: 'execute_trade',
+          opportunity,
+          contractAddress: state.deployedContract
+        }
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const actualProfit = data.actualProfit;
       
       setState(prev => ({
         ...prev,
-        totalProfits: prev.totalProfits + profit,
+        totalProfits: prev.totalProfits + actualProfit,
         opportunities: prev.opportunities.filter(opp => opp.id !== opportunity.id),
         isExecuting: false
       }));
       
-      toast.success(`Arbitrage executed! Profit: ${profit.toFixed(4)} ETH`);
+      toast.success(`Arbitrage executed! Profit: ${actualProfit.toFixed(4)} ETH (TX: ${data.txHash.substring(0, 8)}...)`);
     } catch (error) {
       setState(prev => ({ ...prev, isExecuting: false }));
       toast.error("Execution failed: " + (error as Error).message);
     }
-  }, []);
+  }, [state.deployedContract]);
 
-  // Generate mock opportunities when engine is running
+  // Scan for opportunities when engine is running
   useEffect(() => {
-    if (!state.isRunning) return;
+    if (!state.isRunning || !state.contractDeployed) return;
 
-    const generateOpportunity = () => {
-      const pairs = ['WETH/USDC', 'WETH/DAI', 'USDC/DAI', 'WBTC/WETH', 'LINK/WETH'];
-      const dexes = ['Uniswap V2', 'Uniswap V3', 'SushiSwap', 'Curve', 'Balancer', '1inch', '0x Protocol'];
-      
-      const tokenPair = pairs[Math.floor(Math.random() * pairs.length)];
-      const buyDex = dexes[Math.floor(Math.random() * dexes.length)];
-      let sellDex = dexes[Math.floor(Math.random() * dexes.length)];
-      while (sellDex === buyDex) {
-        sellDex = dexes[Math.floor(Math.random() * dexes.length)];
-      }
-      
-      const buyPrice = 1000 + Math.random() * 2000;
-      const profitPercent = 0.5 + Math.random() * 4; // 0.5% to 4.5% profit
-      const sellPrice = buyPrice * (1 + profitPercent / 100);
-      const maxAmount = Math.floor(10000 + Math.random() * 90000);
-      const profitETH = (maxAmount * buyPrice * profitPercent / 100) / 3000; // Convert to ETH estimate
+    const scanForOpportunities = async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke('arbitrage-engine', {
+          body: { action: 'scan_opportunities' }
+        });
 
-      return {
-        id: Date.now() + Math.random().toString(),
-        tokenPair,
-        buyDex,
-        sellDex,
-        buyPrice,
-        sellPrice,
-        profitPercent,
-        profitETH,
-        maxAmount,
-        timestamp: new Date()
-      };
-    };
+        if (error) {
+          console.error('Scan error:', error);
+          return;
+        }
 
-    const scanInterval = setInterval(() => {
-      if (Math.random() > 0.3) { // 70% chance to find opportunity
-        const opportunity = generateOpportunity();
+        if (data.opportunities && data.opportunities.length > 0) {
+          setState(prev => ({
+            ...prev,
+            opportunities: [...prev.opportunities, ...data.opportunities].slice(-5) // Keep last 5
+          }));
+        }
+
+        // Update protocol last scan times
         setState(prev => ({
           ...prev,
-          opportunities: [...prev.opportunities.slice(-4), opportunity] // Keep last 5 opportunities
+          protocols: prev.protocols.map(protocol => ({
+            ...protocol,
+            lastScan: protocol.status === 'active' ? new Date() : protocol.lastScan
+          }))
         }));
+      } catch (error) {
+        console.error('Error scanning opportunities:', error);
       }
-      
-      // Update protocol last scan times
-      setState(prev => ({
-        ...prev,
-        protocols: prev.protocols.map(protocol => ({
-          ...protocol,
-          lastScan: protocol.status === 'active' ? new Date() : protocol.lastScan
-        }))
-      }));
-    }, state.scanInterval * 1000);
+    };
+
+    // Initial scan
+    scanForOpportunities();
+
+    // Set up continuous scanning
+    const scanInterval = setInterval(scanForOpportunities, state.scanInterval * 1000);
 
     return () => clearInterval(scanInterval);
-  }, [state.isRunning, state.scanInterval]);
+  }, [state.isRunning, state.contractDeployed, state.scanInterval]);
+
+  // Initialize wallet on mount
+  useEffect(() => {
+    initializeWallet();
+  }, [initializeWallet]);
 
   return {
     ...state,
     toggleEngine,
-    connectWallet,
+    deployContract,
     executeOpportunity
   };
 }

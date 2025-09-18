@@ -1,1 +1,7 @@
 project_id = "gjfybocagqjdculreuol"
+
+[functions.deploy-contract]
+verify_jwt = false
+
+[functions.arbitrage-engine]
+verify_jwt = false

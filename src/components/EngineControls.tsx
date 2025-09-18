@@ -1,37 +1,41 @@
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Play, Pause, Wallet, Settings, RefreshCw } from "lucide-react";
+import { Play, Pause, Wallet, RefreshCw, Rocket, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 
 interface EngineControlsProps {
   isRunning: boolean;
   onToggleEngine: () => void;
-  onConnectWallet: () => void;
+  onDeployContract: () => void;
   walletConnected: boolean;
   walletAddress?: string;
+  contractDeployed: boolean;
+  deployedContract?: string;
 }
 
 export function EngineControls({
   isRunning,
   onToggleEngine,
-  onConnectWallet,
+  onDeployContract,
   walletConnected,
-  walletAddress
+  walletAddress,
+  contractDeployed,
+  deployedContract
 }: EngineControlsProps) {
   const handleToggleEngine = () => {
-    if (!walletConnected) {
-      toast.error("Please connect your wallet first");
+    if (!contractDeployed) {
+      toast.error("Please deploy contract first");
       return;
     }
     onToggleEngine();
-    toast.success(isRunning ? "Engine paused" : "Engine started");
+    toast.success(isRunning ? "Engine paused" : "Engine resumed");
   };
 
   return (
     <Card className="bg-card/50 backdrop-blur-sm border-primary/20 shadow-trading">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Settings className="h-5 w-5 text-primary" />
+          <Rocket className="h-5 w-5 text-primary" />
           Engine Controls
         </CardTitle>
       </CardHeader>
@@ -43,7 +47,7 @@ export function EngineControls({
             size="xl"
             onClick={handleToggleEngine}
             className="flex-1 animate-slide-up"
-            disabled={!walletConnected}
+            disabled={!contractDeployed}
           >
             {isRunning ? (
               <>
@@ -53,54 +57,64 @@ export function EngineControls({
             ) : (
               <>
                 <Play className="h-5 w-5" />
-                Start Engine
+                {contractDeployed ? "Resume Engine" : "Deploy First"}
               </>
             )}
           </Button>
 
           <Button
-            variant={walletConnected ? "profit" : "wallet"}
+            variant={contractDeployed ? "profit" : "wallet"}
             size="xl"
-            onClick={onConnectWallet}
+            onClick={onDeployContract}
             className="flex-1 animate-slide-up"
+            disabled={contractDeployed}
           >
-            <Wallet className="h-5 w-5" />
-            {walletConnected ? "Connected" : "Connect Wallet"}
+            <Rocket className="h-5 w-5" />
+            {contractDeployed ? "Contract Ready" : "Deploy Contract"}
           </Button>
         </div>
 
-        {/* Wallet Address Display */}
-        {walletConnected && walletAddress && (
-          <div className="bg-muted/50 rounded-lg p-3 animate-slide-up">
-            <p className="text-xs text-muted-foreground mb-1">Connected Wallet</p>
-            <p className="font-mono text-sm">
-              {walletAddress.substring(0, 6)}...{walletAddress.slice(-4)}
-            </p>
+        {/* Wallet & Contract Display */}
+        {walletAddress && (
+          <div className="space-y-2 animate-slide-up">
+            <div className="bg-muted/50 rounded-lg p-3">
+              <p className="text-xs text-muted-foreground mb-1">Private Key Wallet</p>
+              <p className="font-mono text-sm">
+                {walletAddress.substring(0, 6)}...{walletAddress.slice(-4)}
+              </p>
+            </div>
+            {deployedContract && (
+              <div className="bg-success/10 border border-success/20 rounded-lg p-3">
+                <p className="text-xs text-success mb-1">Deployed Contract</p>
+                <p className="font-mono text-sm">
+                  {deployedContract.substring(0, 6)}...{deployedContract.slice(-4)}
+                </p>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Quick Actions */}
-        <div className="flex gap-2 pt-2">
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1"
-            onClick={() => toast.info("Refreshing DEX data...")}
-          >
-            <RefreshCw className="h-4 w-4" />
-            Refresh Data
-          </Button>
-          
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1"
-            onClick={() => toast.info("Opening settings...")}
-          >
-            <Settings className="h-4 w-4" />
-            Settings
-          </Button>
-        </div>
+        {/* Status Indicators */}
+        {contractDeployed && (
+          <div className="flex gap-2 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={() => toast.info("Refreshing opportunities...")}
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh Scan
+            </Button>
+            
+            {!isRunning && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-warning/10 rounded-lg flex-1">
+                <AlertTriangle className="h-4 w-4 text-warning" />
+                <span className="text-sm text-warning">Engine Paused</span>
+              </div>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
