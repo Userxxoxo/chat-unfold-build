@@ -40,9 +40,6 @@ export function Dashboard() {
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-primary bg-clip-text text-transparent mb-4">
               ARBEngine Dashboard
             </h1>
-            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Advanced multi-DEX arbitrage engine with real-time opportunity detection and automated flashloan execution
-            </p>
             <div className="flex items-center justify-center gap-4 mt-6">
               <Badge variant="secondary" className="bg-success/10 text-success border-success/20">
                 <Activity className="h-3 w-3 mr-1" />
