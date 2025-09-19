@@ -15,6 +15,7 @@ export function Dashboard() {
     walletConnected,
     walletAddress,
     deployedContract,
+    contractDeployed,
     totalProfits,
     dexCount,
     scanInterval,
@@ -22,7 +23,7 @@ export function Dashboard() {
     protocols,
     isExecuting,
     toggleEngine,
-    connectWallet,
+    deployContract,
     executeOpportunity
   } = useArbitrageEngine();
 

@@ -14,7 +14,81 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      arbitrage_trades: {
+        Row: {
+          actual_profit: number | null
+          buy_dex: string
+          contract_address: string
+          created_at: string
+          estimated_profit: number
+          executed_at: string
+          id: string
+          opportunity_id: string
+          sell_dex: string
+          status: string
+          token_pair: string
+          tx_hash: string
+        }
+        Insert: {
+          actual_profit?: number | null
+          buy_dex: string
+          contract_address: string
+          created_at?: string
+          estimated_profit: number
+          executed_at?: string
+          id?: string
+          opportunity_id: string
+          sell_dex: string
+          status?: string
+          token_pair: string
+          tx_hash: string
+        }
+        Update: {
+          actual_profit?: number | null
+          buy_dex?: string
+          contract_address?: string
+          created_at?: string
+          estimated_profit?: number
+          executed_at?: string
+          id?: string
+          opportunity_id?: string
+          sell_dex?: string
+          status?: string
+          token_pair?: string
+          tx_hash?: string
+        }
+        Relationships: []
+      }
+      deployed_contracts: {
+        Row: {
+          abi: Json | null
+          contract_address: string
+          created_at: string
+          deployed_at: string
+          deployment_tx: string | null
+          id: string
+          wallet_address: string
+        }
+        Insert: {
+          abi?: Json | null
+          contract_address: string
+          created_at?: string
+          deployed_at?: string
+          deployment_tx?: string | null
+          id?: string
+          wallet_address: string
+        }
+        Update: {
+          abi?: Json | null
+          contract_address?: string
+          created_at?: string
+          deployed_at?: string
+          deployment_tx?: string | null
+          id?: string
+          wallet_address?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
