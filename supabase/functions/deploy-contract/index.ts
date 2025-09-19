@@ -42,14 +42,27 @@ Deno.serve(async (req) => {
 
     // Get private key from Supabase secrets
     const privateKey = Deno.env.get('PRIVATE_KEY')
-    const alchemyUrl = Deno.env.get('ALCHEMY_API_URL_MAINNET') || 'https://eth-mainnet.g.alchemy.com/v2/demo'
+    const alchemyUrl = Deno.env.get('ALCHEMY_API_URL_MAINNET')
 
     if (!privateKey) {
       throw new Error('Private key not configured in Supabase secrets')
     }
 
-    const provider = new ethers.JsonRpcProvider(alchemyUrl)
-    const wallet = new ethers.Wallet(privateKey, provider)
+    if (!alchemyUrl) {
+      throw new Error('ALCHEMY_API_URL_MAINNET not configured in Supabase secrets. Please add your Alchemy API URL.')
+    }
+
+    let provider, wallet
+    try {
+      provider = new ethers.JsonRpcProvider(alchemyUrl)
+      wallet = new ethers.Wallet(privateKey, provider)
+      
+      // Test the connection
+      await provider.getNetwork()
+    } catch (error) {
+      console.error('RPC Provider error:', error)
+      throw new Error(`Failed to connect to Ethereum network. Please check your ALCHEMY_API_URL_MAINNET configuration. Error: ${error.message}`)
+    }
 
     if (action === 'estimate') {
       // Estimate deployment cost
