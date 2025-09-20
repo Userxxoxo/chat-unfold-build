@@ -182,6 +182,13 @@ const MOCK_PROTOCOLS: DexProtocol[] = [
 export function useArbitrageEngine(): EngineState & {
   toggleEngine: () => void;
   deployContract: () => Promise<void>;
+  deployContractWithVerification: (opts: {
+    sourceCode?: string;
+    contractName?: string;
+    compilerVersion?: string;
+    optimizationUsed?: boolean;
+    runs?: number;
+  }) => Promise<void>;
   executeOpportunity: (opportunity: ArbitrageOpportunity) => Promise<void>;
 } {
   const [state, setState] = useState<EngineState>({
@@ -218,58 +225,62 @@ export function useArbitrageEngine(): EngineState & {
     }
   }, []);
 
-  // Deploy arbitrage contract
-  const deployContract = useCallback(async () => {
-    setState(prev => ({ ...prev, isDeploying: true }));
-    
-    try {
-      toast.info("Estimating deployment costs...");
-      
-      // Get cost estimate
-      const { data: costData, error: costError } = await supabase.functions.invoke('deploy-contract', {
-        body: { action: 'estimate' }
-      });
+// Deploy arbitrage contract with optional Etherscan verification
+const deployContractWithVerification = useCallback(async (opts: {
+  sourceCode?: string;
+  contractName?: string;
+  compilerVersion?: string;
+  optimizationUsed?: boolean;
+  runs?: number;
+}) => {
+  setState(prev => ({ ...prev, isDeploying: true }));
+  try {
+    toast.info("Estimating deployment costs...");
 
-      if (costError) {
-        throw new Error(costError.message);
-      }
+    const { data: costData, error: costError } = await supabase.functions.invoke('deploy-contract', {
+      body: { action: 'estimate' }
+    });
 
-      // Show cost confirmation
-      const confirmDeploy = confirm(
-        `Contract Deployment Cost:\n` +
-        `Gas: ${costData.cost.estimatedCost} ETH (~$${costData.cost.estimatedCostUSD})\n` +
-        `Proceed with deployment?`
-      );
+    if (costError) throw new Error(costError.message);
 
-      if (!confirmDeploy) {
-        setState(prev => ({ ...prev, isDeploying: false }));
-        return;
-      }
-
-      toast.info("Deploying arbitrage contract...");
-
-      const { data, error } = await supabase.functions.invoke('deploy-contract', {
-        body: { action: 'deploy' }
-      });
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      setState(prev => ({
-        ...prev,
-        contractDeployed: true,
-        deployedContract: data.contractAddress,
-        walletAddress: data.walletAddress,
-        isDeploying: false
-      }));
-
-      toast.success(`Contract deployed at ${data.contractAddress.substring(0, 8)}...`);
-    } catch (error) {
+    const confirmDeploy = confirm(
+      `Contract Deployment Cost:\n` +
+      `Gas: ${costData.cost.estimatedCost} ETH (~$${costData.cost.estimatedCostUSD})\n` +
+      `Proceed with deployment?`
+    );
+    if (!confirmDeploy) {
       setState(prev => ({ ...prev, isDeploying: false }));
-      toast.error("Deployment failed: " + (error as Error).message);
+      return;
     }
-  }, []);
+
+    toast.info("Deploying arbitrage contract...");
+
+    const { data, error } = await supabase.functions.invoke('deploy-contract', {
+      body: { action: 'deploy', ...opts }
+    });
+
+    if (error) throw new Error(error.message);
+
+    setState(prev => ({
+      ...prev,
+      contractDeployed: true,
+      deployedContract: data.contractAddress,
+      walletAddress: data.walletAddress,
+      isDeploying: false
+    }));
+
+    const ver = data.verification?.status ? ` | Verify: ${data.verification.status}` : '';
+    toast.success(`Contract deployed at ${data.contractAddress.substring(0, 8)}...${ver}`);
+  } catch (error) {
+    setState(prev => ({ ...prev, isDeploying: false }));
+    toast.error("Deployment failed: " + (error as Error).message);
+  }
+}, []);
+
+// Backwards-compatible wrapper
+const deployContract = useCallback(async () => {
+  await deployContractWithVerification({});
+}, [deployContractWithVerification]);
 
   // Toggle engine
   const toggleEngine = useCallback(() => {
@@ -375,10 +386,11 @@ export function useArbitrageEngine(): EngineState & {
     initializeWallet();
   }, [initializeWallet]);
 
-  return {
-    ...state,
-    toggleEngine,
-    deployContract,
-    executeOpportunity
-  };
+return {
+  ...state,
+  toggleEngine,
+  deployContract,
+  deployContractWithVerification,
+  executeOpportunity
+};
 }

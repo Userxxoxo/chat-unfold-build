@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp, Activity, Globe, Settings } from "lucide-react";
 import heroImage from "@/assets/arbengine-hero.jpg";
+import { DeployContractModal } from "@/components/DeployContractModal";
 
 export function Dashboard() {
   const {
@@ -22,10 +23,13 @@ export function Dashboard() {
     opportunities,
     protocols,
     isExecuting,
+    isDeploying,
     toggleEngine,
     deployContract,
+    deployContractWithVerification,
     executeOpportunity
   } = useArbitrageEngine();
+  const [deployModalOpen, setDeployModalOpen] = useState(false);
 
   return (
     <div className="min-h-screen bg-gradient-background">
@@ -75,7 +79,7 @@ export function Dashboard() {
           <EngineControls
             isRunning={isRunning}
             onToggleEngine={toggleEngine}
-            onDeployContract={deployContract}
+            onDeployContract={() => setDeployModalOpen(true)}
             walletConnected={walletConnected}
             walletAddress={walletAddress}
             contractDeployed={contractDeployed}
@@ -135,6 +139,13 @@ export function Dashboard() {
           </Tabs>
         </div>
       </div>
+      {/* Deploy & Verify Modal */}
+      <DeployContractModal
+        open={deployModalOpen}
+        onClose={() => setDeployModalOpen(false)}
+        onDeploy={deployContractWithVerification}
+        isDeploying={isDeploying}
+      />
 
       {/* Footer */}
       <footer className="border-t border-border/50 bg-card/20 backdrop-blur-sm mt-16">
