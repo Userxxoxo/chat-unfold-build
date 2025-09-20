@@ -50,11 +50,13 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    const { action } = await req.json()
+    const body = await req.json()
+    const { action, sourceCode, contractName, compilerVersion, optimizationUsed, runs } = body
 
     // Get private key from Supabase secrets
     const privateKey = Deno.env.get('PRIVATE_KEY')
     const alchemyUrl = Deno.env.get('ALCHEMY_API_URL_MAINNET')
+    const etherscanApiKey = Deno.env.get('ETHERSCAN_API_KEY')
 
     if (!privateKey) {
       throw new Error('Private key not configured in Supabase secrets')
@@ -166,13 +168,56 @@ Deno.serve(async (req) => {
         console.log('✅ Contract info stored in database')
       }
 
+      // Optional: Verify and publish on Etherscan if source is provided
+      let verification: { submitted: boolean; status?: string; message?: string; url?: string } = { submitted: false }
+      if (sourceCode && contractName && compilerVersion && etherscanApiKey) {
+        try {
+          const constructorArgs = ethers.AbiCoder.defaultAbiCoder().encode(['address'], [aavePoolProvider]).slice(2)
+          const verifyRes = await fetch('https://api.etherscan.io/api', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({
+              apikey: etherscanApiKey,
+              module: 'contract',
+              action: 'verifysourcecode',
+              contractaddress: contractAddress,
+              sourceCode: sourceCode,
+              codeformat: 'solidity-single-file',
+              contractname: contractName,
+              compilerversion: compilerVersion,
+              optimizationUsed: (optimizationUsed ? '1' : '0'),
+              runs: String(runs ?? 200),
+              constructorArguements: constructorArgs
+            })
+          })
+          const verifyJson = await verifyRes.json()
+          if (verifyJson.status === '1') {
+            const guid = verifyJson.result
+            let status = 'Pending'
+            for (let i = 0; i < 12; i++) {
+              await new Promise((r) => setTimeout(r, 2500))
+              const chkRes = await fetch(`https://api.etherscan.io/api?module=contract&action=checkverifystatus&guid=${guid}&apikey=${etherscanApiKey}`)
+              const chkJson = await chkRes.json()
+              if (chkJson.status === '1') { status = 'Success'; break }
+              if (chkJson.status === '0' && typeof chkJson.result === 'string' && chkJson.result.toLowerCase().includes('already verified')) { status = 'Already Verified'; break }
+            }
+            verification = { submitted: true, status, url: `https://etherscan.io/address/${contractAddress}#code` }
+          } else {
+            verification = { submitted: true, status: 'Error', message: verifyJson.result }
+          }
+        } catch (e) {
+          verification = { submitted: true, status: 'Error', message: (e as Error).message }
+        }
+      }
+
       return new Response(JSON.stringify({
         success: true,
         contractAddress,
         walletAddress: wallet.address,
         deploymentTx: deploymentTx?.hash,
         gasUsed: deploymentTx?.gasLimit?.toString(),
-        aavePoolProvider
+        aavePoolProvider,
+        verification
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
@@ -182,10 +227,15 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error('Deployment error:', error)
+    const message = (error as any)?.message || String(error)
+    let status = 500
+    const m = message.toLowerCase()
+    if (m.includes('insufficient funds')) status = 402
+    else if (m.includes('failed to connect') || m.includes('network')) status = 502
     return new Response(JSON.stringify({
-      error: error.message
+      error: message
     }), {
-      status: 500,
+      status,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     })
   }
