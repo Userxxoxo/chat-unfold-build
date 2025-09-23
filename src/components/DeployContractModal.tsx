@@ -1,106 +1,121 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
+import { Loader2, DollarSign, Fuel } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 
-export interface VerifyOptions {
-  sourceCode?: string;
-  contractName?: string; // Format: FileName.sol:ContractName or ContractName for single file
-  compilerVersion?: string; // e.g. v0.8.24+commit.e11b9ed9
-  optimizationUsed?: boolean;
-  runs?: number;
+interface DeploymentCost {
+  estimatedCost: string;
+  estimatedCostUSD: string;
+  gasLimit: string;
+  gasPrice: string;
 }
 
 interface DeployContractModalProps {
   open: boolean;
   onClose: () => void;
-  onDeploy: (opts: VerifyOptions) => Promise<void>;
+  onDeploy: () => Promise<void>;
   isDeploying?: boolean;
 }
 
 export function DeployContractModal({ open, onClose, onDeploy, isDeploying }: DeployContractModalProps) {
-  const [sourceCode, setSourceCode] = useState<string>("");
-  const [contractName, setContractName] = useState<string>("");
-  const [compilerVersion, setCompilerVersion] = useState<string>("");
-  const [optimizationUsed, setOptimizationUsed] = useState<boolean>(true);
-  const [runs, setRuns] = useState<number>(200);
+  const [costs, setCosts] = useState<DeploymentCost | null>(null);
+  const [isEstimating, setIsEstimating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open && !costs && !isEstimating) {
+      estimateCosts();
+    }
+  }, [open]);
+
+  const estimateCosts = async () => {
+    setIsEstimating(true);
+    setError(null);
+    try {
+      const { data, error: functionError } = await supabase.functions.invoke('deploy-contract', {
+        body: { action: 'estimate' }
+      });
+      
+      if (functionError) throw functionError;
+      if (data?.error) throw new Error(data.error);
+      
+      setCosts(data.cost);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to estimate costs');
+    } finally {
+      setIsEstimating(false);
+    }
+  };
 
   const handleDeploy = async () => {
-    await onDeploy({ sourceCode, contractName, compilerVersion, optimizationUsed, runs });
+    await onDeploy();
     onClose();
   };
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Deploy & Verify Smart Contract</DialogTitle>
+          <DialogTitle>Deploy Arbitrage Contract</DialogTitle>
           <DialogDescription>
-            Optionally provide Solidity source and compiler settings to auto-verify and publish on Etherscan after deployment.
+            Ready to deploy your pre-configured arbitrage contract with automatic Etherscan verification.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="source">Solidity Source Code (optional)</Label>
-            <Textarea
-              id="source"
-              placeholder="// Paste your Solidity source here if you want Etherscan verification\n// pragma solidity ^0.8.24;\n// contract Arbitrage { ... }"
-              value={sourceCode}
-              onChange={(e) => setSourceCode(e.target.value)}
-              className="h-48"
-            />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="name">Contract Name</Label>
-              <Input
-                id="name"
-                placeholder="Arbitrage" 
-                value={contractName}
-                onChange={(e) => setContractName(e.target.value)}
-              />
+        <div className="space-y-6">
+          {error && (
+            <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+              {error}
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="compiler">Compiler Version</Label>
-              <Input
-                id="compiler"
-                placeholder="v0.8.24+commit.e11b9ed9"
-                value={compilerVersion}
-                onChange={(e) => setCompilerVersion(e.target.value)}
-              />
-            </div>
-          </div>
+          )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-            <div className="flex items-center justify-between p-3 rounded-md bg-muted/40">
-              <div>
-                <Label>Enable Optimizer</Label>
-                <p className="text-xs text-muted-foreground">Recommended for production deployments</p>
+          {isEstimating ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-muted-foreground">Estimating deployment costs...</span>
+            </div>
+          ) : costs ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <DollarSign className="h-4 w-4" />
+                Deployment Cost Estimate
               </div>
-              <Switch checked={optimizationUsed} onCheckedChange={setOptimizationUsed} />
+              
+              <div className="grid grid-cols-2 gap-4 p-4 rounded-md bg-muted/40">
+                <div>
+                  <p className="text-xs text-muted-foreground">ETH Cost</p>
+                  <p className="font-mono text-lg">{parseFloat(costs.estimatedCost).toFixed(6)} ETH</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">USD Estimate</p>
+                  <p className="font-mono text-lg">${costs.estimatedCostUSD}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Fuel className="h-3 w-3" />
+                Gas: {parseInt(costs.gasLimit).toLocaleString()} @ {(parseInt(costs.gasPrice) / 1e9).toFixed(2)} Gwei
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="runs">Optimizer Runs</Label>
-              <Input
-                id="runs"
-                type="number"
-                min={0}
-                value={runs}
-                onChange={(e) => setRuns(parseInt(e.target.value || "0", 10))}
-              />
-            </div>
-          </div>
+          ) : null}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={isDeploying}>Cancel</Button>
-          <Button onClick={handleDeploy} disabled={isDeploying} variant="engine">
-            {isDeploying ? 'Deploying...' : 'Deploy & Verify'}
+          <Button 
+            onClick={handleDeploy} 
+            disabled={isDeploying || !costs} 
+            variant="engine"
+          >
+            {isDeploying ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                Deploying...
+              </>
+            ) : (
+              'Deploy Contract'
+            )}
           </Button>
         </DialogFooter>
       </DialogContent>

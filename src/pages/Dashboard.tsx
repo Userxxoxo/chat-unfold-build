@@ -26,7 +26,6 @@ export function Dashboard() {
     isDeploying,
     toggleEngine,
     deployContract,
-    deployContractWithVerification,
     executeOpportunity
   } = useArbitrageEngine();
   const [deployModalOpen, setDeployModalOpen] = useState(false);
@@ -140,12 +139,12 @@ export function Dashboard() {
         </div>
       </div>
       {/* Deploy & Verify Modal */}
-      <DeployContractModal
-        open={deployModalOpen}
-        onClose={() => setDeployModalOpen(false)}
-        onDeploy={deployContractWithVerification}
-        isDeploying={isDeploying}
-      />
+        <DeployContractModal
+          open={deployModalOpen}
+          onClose={() => setDeployModalOpen(false)}
+          onDeploy={deployContract}
+          isDeploying={isDeploying}
+        />
 
       {/* Footer */}
       <footer className="border-t border-border/50 bg-card/20 backdrop-blur-sm mt-16">

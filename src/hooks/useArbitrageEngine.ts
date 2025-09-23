@@ -182,13 +182,6 @@ const MOCK_PROTOCOLS: DexProtocol[] = [
 export function useArbitrageEngine(): EngineState & {
   toggleEngine: () => void;
   deployContract: () => Promise<void>;
-  deployContractWithVerification: (opts: {
-    sourceCode?: string;
-    contractName?: string;
-    compilerVersion?: string;
-    optimizationUsed?: boolean;
-    runs?: number;
-  }) => Promise<void>;
   executeOpportunity: (opportunity: ArbitrageOpportunity) => Promise<void>;
 } {
   const [state, setState] = useState<EngineState>({
@@ -225,62 +218,172 @@ export function useArbitrageEngine(): EngineState & {
     }
   }, []);
 
-// Deploy arbitrage contract with optional Etherscan verification
-const deployContractWithVerification = useCallback(async (opts: {
-  sourceCode?: string;
-  contractName?: string;
-  compilerVersion?: string;
-  optimizationUsed?: boolean;
-  runs?: number;
-}) => {
+// Deploy arbitrage contract with pre-configured settings
+const deployContract = useCallback(async () => {
   setState(prev => ({ ...prev, isDeploying: true }));
   try {
-    toast.info("Estimating deployment costs...");
-
-    const { data: costData, error: costError } = await supabase.functions.invoke('deploy-contract', {
-      body: { action: 'estimate' }
-    });
-
-    if (costError) throw new Error(costError.message);
-
-    const confirmDeploy = confirm(
-      `Contract Deployment Cost:\n` +
-      `Gas: ${costData.cost.estimatedCost} ETH (~$${costData.cost.estimatedCostUSD})\n` +
-      `Proceed with deployment?`
-    );
-    if (!confirmDeploy) {
-      setState(prev => ({ ...prev, isDeploying: false }));
-      return;
-    }
-
-    toast.info("Deploying arbitrage contract...");
-
     const { data, error } = await supabase.functions.invoke('deploy-contract', {
-      body: { action: 'deploy', ...opts }
+      body: { 
+        action: 'deploy',
+        // Pre-configured contract details for automatic verification
+        sourceCode: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+interface IERC20 {
+    function transfer(address to, uint256 amount) external returns (bool);
+    function transferFrom(address from, address to, uint256 amount) external returns (bool);
+    function balanceOf(address account) external view returns (uint256);
+}
+
+interface IFlashLoanReceiver {
+    function executeOperation(
+        address[] calldata assets,
+        uint256[] calldata amounts,
+        uint256[] calldata premiums,
+        address initiator,
+        bytes calldata params
+    ) external returns (bool);
+}
+
+interface IPoolAddressesProvider {
+    function getPool() external view returns (address);
+}
+
+interface IPool {
+    function flashLoan(
+        address receiverAddress,
+        address[] calldata assets,
+        uint256[] calldata amounts,
+        uint256[] calldata modes,
+        address onBehalfOf,
+        bytes calldata params,
+        uint16 referralCode
+    ) external;
+}
+
+contract ArbitrageEngine is IFlashLoanReceiver {
+    address public owner;
+    IPoolAddressesProvider public poolProvider;
+    
+    event ArbitrageExecuted(address indexed asset, uint256 amount, int256 profit, address dexA, address dexB);
+    event FlashloanExecuted(address indexed asset, uint256 amount, uint256 premium);
+    event FundsWithdrawn(address indexed token, address indexed to, uint256 amount);
+    
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this");
+        _;
+    }
+    
+    constructor(address _poolProvider) {
+        owner = msg.sender;
+        poolProvider = IPoolAddressesProvider(_poolProvider);
+    }
+    
+    function executeArbitrage(
+        address asset,
+        uint256 amount,
+        address dexA,
+        address dexB,
+        bytes calldata params
+    ) external onlyOwner {
+        address[] memory assets = new address[](1);
+        uint256[] memory amounts = new uint256[](1);
+        uint256[] memory modes = new uint256[](1);
+        
+        assets[0] = asset;
+        amounts[0] = amount;
+        modes[0] = 0; // No debt mode
+        
+        IPool pool = IPool(poolProvider.getPool());
+        pool.flashLoan(address(this), assets, amounts, modes, address(this), params, 0);
+    }
+    
+    function executeOperation(
+        address[] calldata assets,
+        uint256[] calldata amounts,
+        uint256[] calldata premiums,
+        address initiator,
+        bytes calldata params
+    ) external override returns (bool) {
+        require(msg.sender == poolProvider.getPool(), "Invalid caller");
+        
+        // Decode arbitrage parameters
+        (address dexA, address dexB) = abi.decode(params, (address, address));
+        
+        address asset = assets[0];
+        uint256 amount = amounts[0];
+        uint256 premium = premiums[0];
+        
+        // Execute arbitrage logic here
+        // 1. Trade on DEX A
+        // 2. Trade on DEX B
+        // 3. Calculate profit
+        
+        emit FlashloanExecuted(asset, amount, premium);
+        emit ArbitrageExecuted(asset, amount, 0, dexA, dexB);
+        
+        // Approve pool to pull the owed amount
+        IERC20(asset).transfer(msg.sender, amount + premium);
+        
+        return true;
+    }
+    
+    function withdraw(address token, uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be greater than zero");
+        require(IERC20(token).balanceOf(address(this)) >= amount, "Insufficient contract balance");
+        
+        IERC20(token).transfer(owner, amount);
+        emit FundsWithdrawn(token, owner, amount);
+    }
+    
+    function withdrawETH(uint256 amount) external onlyOwner {
+        require(amount > 0, "Amount must be greater than zero");
+        require(address(this).balance >= amount, "Insufficient contract balance");
+        
+        payable(owner).transfer(amount);
+        emit FundsWithdrawn(address(0), owner, amount);
+    }
+    
+    function getBalance(address token) external view returns (uint256) {
+        return IERC20(token).balanceOf(address(this));
+    }
+    
+    function getETHBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+    
+    function emergencyWithdraw() external onlyOwner {
+        payable(owner).transfer(address(this).balance);
+    }
+    
+    receive() external payable {}
+}`,
+        contractName: 'ArbitrageEngine',
+        compilerVersion: 'v0.8.24+commit.e11b9ed9',
+        optimizationUsed: true,
+        runs: 200
+      }
     });
 
-    if (error) throw new Error(error.message);
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
 
-    setState(prev => ({
-      ...prev,
-      contractDeployed: true,
+    setState(prev => ({ 
+      ...prev, 
       deployedContract: data.contractAddress,
+      contractDeployed: true,
       walletAddress: data.walletAddress,
       isDeploying: false
     }));
-
+    
     const ver = data.verification?.status ? ` | Verify: ${data.verification.status}` : '';
     toast.success(`Contract deployed at ${data.contractAddress.substring(0, 8)}...${ver}`);
+    
   } catch (error) {
     setState(prev => ({ ...prev, isDeploying: false }));
     toast.error("Deployment failed: " + (error as Error).message);
   }
 }, []);
-
-// Backwards-compatible wrapper
-const deployContract = useCallback(async () => {
-  await deployContractWithVerification({});
-}, [deployContractWithVerification]);
 
   // Toggle engine
   const toggleEngine = useCallback(() => {
@@ -390,7 +493,6 @@ return {
   ...state,
   toggleEngine,
   deployContract,
-  deployContractWithVerification,
   executeOpportunity
 };
 }
