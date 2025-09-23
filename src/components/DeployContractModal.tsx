@@ -106,7 +106,7 @@ export function DeployContractModal({ open, onClose, onDeploy, isDeploying }: De
           <Button 
             onClick={handleDeploy} 
             disabled={isDeploying || !costs} 
-            variant="engine"
+            className="bg-gradient-primary text-primary-foreground hover:bg-primary/90 shadow-trading hover:shadow-glow-primary font-semibold"
           >
             {isDeploying ? (
               <>
