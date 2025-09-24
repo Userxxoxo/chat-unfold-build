@@ -61,31 +61,94 @@ export type Database = {
       }
       deployed_contracts: {
         Row: {
+          aave_pool_provider: string | null
           abi: Json | null
           contract_address: string
+          contract_name: string | null
           created_at: string
           deployed_at: string
+          deployment_cost: number | null
           deployment_tx: string | null
+          gas_price: number | null
+          gas_used: number | null
           id: string
+          network: string | null
+          status: string | null
+          updated_at: string | null
+          verification_status: string | null
+          verification_url: string | null
           wallet_address: string
         }
         Insert: {
+          aave_pool_provider?: string | null
           abi?: Json | null
           contract_address: string
+          contract_name?: string | null
           created_at?: string
           deployed_at?: string
+          deployment_cost?: number | null
           deployment_tx?: string | null
+          gas_price?: number | null
+          gas_used?: number | null
           id?: string
+          network?: string | null
+          status?: string | null
+          updated_at?: string | null
+          verification_status?: string | null
+          verification_url?: string | null
           wallet_address: string
         }
         Update: {
+          aave_pool_provider?: string | null
           abi?: Json | null
           contract_address?: string
+          contract_name?: string | null
           created_at?: string
           deployed_at?: string
+          deployment_cost?: number | null
           deployment_tx?: string | null
+          gas_price?: number | null
+          gas_used?: number | null
           id?: string
+          network?: string | null
+          status?: string | null
+          updated_at?: string | null
+          verification_status?: string | null
+          verification_url?: string | null
           wallet_address?: string
+        }
+        Relationships: []
+      }
+      deployment_configs: {
+        Row: {
+          auto_deploy: boolean | null
+          created_at: string
+          gas_price_gwei: number | null
+          id: string
+          network: string
+          rpc_url: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          auto_deploy?: boolean | null
+          created_at?: string
+          gas_price_gwei?: number | null
+          id?: string
+          network?: string
+          rpc_url: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          auto_deploy?: boolean | null
+          created_at?: string
+          gas_price_gwei?: number | null
+          id?: string
+          network?: string
+          rpc_url?: string
+          updated_at?: string
+          user_id?: string
         }
         Relationships: []
       }
