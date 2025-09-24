@@ -148,11 +148,15 @@ Deno.serve(async (req) => {
           .from('deployed_contracts')
           .insert({
             contract_address: contractAddress,
-            deployer_address: wallet.address,
-            transaction_hash: receipt?.hash,
-            gas_used: receipt?.gasUsed?.toString(),
-            block_number: receipt?.blockNumber,
-            aave_pool_provider: aavePoolProvider
+            wallet_address: wallet.address,
+            deployment_tx: receipt?.hash,
+            gas_used: receipt?.gasUsed ? parseInt(receipt.gasUsed.toString()) : null,
+            gas_price: gasPrice ? parseInt(gasPrice.toString()) : null,
+            deployment_cost: costEstimate ? parseFloat(costEstimate) : null,
+            contract_name: 'ArbitrageEngine',
+            network: 'mainnet',
+            aave_pool_provider: aavePoolProvider,
+            status: 'deployed'
           })
 
         if (dbError) {
