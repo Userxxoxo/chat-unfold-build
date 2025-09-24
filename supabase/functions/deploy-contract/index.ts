@@ -35,11 +35,24 @@ interface DeploymentCost {
 Deno.serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
+    return new Response(null, { 
+      headers: {
+        ...corsHeaders,
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+      } 
+    })
   }
 
   try {
     console.log('📋 Deploy contract request received')
+    
+    // Validate content type
+    if (req.headers.get('content-type') !== 'application/json') {
+      return new Response(JSON.stringify({ error: 'Content-Type must be application/json' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
     
     // Initialize Supabase client
     const supabase = createClient(
@@ -76,19 +89,26 @@ Deno.serve(async (req) => {
       const feeData = await provider.getFeeData()
       const gasPrice = feeData.gasPrice || ethers.parseUnits('20', 'gwei')
       
-      // Estimate gas for contract deployment
-      const factory = new ethers.ContractFactory(CONTRACT_ABI, CONTRACT_BYTECODE, wallet)
-      const aavePoolProvider = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e' // Mainnet Aave Pool Provider
-      const deploymentTx = await factory.getDeployTransaction(aavePoolProvider)
-      const estimatedGas = await provider.estimateGas(deploymentTx)
+      // Estimate gas for contract deployment with robust fallback
+      let gasWithBuffer: bigint
+      try {
+        const factory = new ethers.ContractFactory(CONTRACT_ABI, CONTRACT_BYTECODE, wallet)
+        const aavePoolProvider = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e' // Mainnet Aave Pool Provider
+        const deploymentTx = await factory.getDeployTransaction(aavePoolProvider)
+        const estimatedGas = await provider.estimateGas(deploymentTx)
+        gasWithBuffer = estimatedGas * 12n / 10n // +20%
+        console.log(`⛽ Estimated gas (factory): ${estimatedGas.toString()}`)
+      } catch (e) {
+        console.warn('Gas estimate fallback due to factory/bytecode error:', (e as Error).message)
+        // Fallback: conservative gas limit for typical contracts with constructor (~1.8M)
+        gasWithBuffer = 1_800_000n
+      }
       
-      // Calculate costs with 20% buffer
-      const gasWithBuffer = estimatedGas * 12n / 10n
       const totalCostWei = gasWithBuffer * gasPrice
       const totalCostETH = ethers.formatEther(totalCostWei)
       
-      // Get ETH price for USD estimate (mock for now)
-      const ethPriceUSD = 3500 // You can integrate with a price API later
+      // USD estimate (static; can be replaced by price API)
+      const ethPriceUSD = 3500
       const totalCostUSD = (parseFloat(totalCostETH) * ethPriceUSD).toFixed(2)
 
       const cost: DeploymentCost = {
@@ -98,7 +118,6 @@ Deno.serve(async (req) => {
         gasPrice: gasPrice.toString()
       }
 
-      console.log(`⛽ Estimated gas: ${estimatedGas.toString()}`)
       console.log(`💰 Total cost: ${totalCostETH} ETH (~$${totalCostUSD})`)
 
       return new Response(JSON.stringify({ cost }), {
@@ -239,11 +258,19 @@ Deno.serve(async (req) => {
     console.error('Deployment error:', error)
     const message = (error as any)?.message || String(error)
     let status = 500
-    const m = message.toLowerCase()
-    if (m.includes('insufficient funds')) status = 402
-    else if (m.includes('failed to connect') || m.includes('network')) status = 502
+    
+    // Handle specific error types
+    if (message.toLowerCase().includes('insufficient funds')) {
+      status = 402
+    } else if (message.toLowerCase().includes('failed to connect') || message.toLowerCase().includes('network')) {
+      status = 502
+    } else if (message.toLowerCase().includes('invalid byteslike')) {
+      status = 400
+    }
+    
     return new Response(JSON.stringify({
-      error: message
+      error: message,
+      timestamp: new Date().toISOString()
     }), {
       status,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
