@@ -163,6 +163,8 @@ Deno.serve(async (req) => {
 
       // Store deployment info in database
       try {
+        const totalCostETH = ethers.formatEther((estimatedGas * 12n / 10n) * (gasPrice.gasPrice || 0n))
+        
         const { error: dbError } = await supabase
           .from('deployed_contracts')
           .insert({
@@ -170,8 +172,8 @@ Deno.serve(async (req) => {
             wallet_address: wallet.address,
             deployment_tx: receipt?.hash,
             gas_used: receipt?.gasUsed ? parseInt(receipt.gasUsed.toString()) : null,
-            gas_price: gasPrice ? parseInt(gasPrice.toString()) : null,
-            deployment_cost: costEstimate ? parseFloat(costEstimate) : null,
+            gas_price: gasPrice.gasPrice ? parseInt(gasPrice.gasPrice.toString()) : null,
+            deployment_cost: parseFloat(totalCostETH),
             contract_name: 'ArbitrageEngine',
             network: 'mainnet',
             aave_pool_provider: aavePoolProvider,
