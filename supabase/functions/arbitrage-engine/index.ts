@@ -81,7 +81,7 @@ Deno.serve(async (req) => {
       await provider.getNetwork()
     } catch (error) {
       console.error('RPC Provider error:', error)
-      throw new Error(`Failed to connect to Ethereum network. Please check your ALCHEMY_API_URL_MAINNET configuration. Error: ${error.message}`)
+      throw new Error(`Failed to connect to Ethereum network. Please check your ALCHEMY_API_URL_MAINNET configuration. Error: ${(error as Error).message}`)
     }
 
     if (action === 'execute_trade') {
@@ -255,7 +255,7 @@ Deno.serve(async (req) => {
 
         return new Response(JSON.stringify({
           success: false,
-          error: error.message,
+          error: (error as Error).message,
           tokenPair: opportunity.tokenPair,
           estimatedProfit: opportunity.profitETH
         }), {
@@ -292,7 +292,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error('Arbitrage engine error:', error)
     return new Response(JSON.stringify({
-      error: error.message
+      error: (error as Error).message
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }

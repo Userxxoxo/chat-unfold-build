@@ -6,20 +6,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Complete Arbitrage Contract ABI
+// Simple contract ABI for testing
 const CONTRACT_ABI = [
-  "constructor(address _aavePoolProvider)",
-  "function executeArbitrage(address asset, uint256 amount, address dexA, address dexB, bytes calldata params) external",
-  "function executeOperation(address[] calldata assets, uint256[] calldata amounts, uint256[] calldata premiums, address initiator, bytes calldata params) external returns (bool)",
-  "function withdraw(address token, uint256 amount) external",
-  "function withdrawETH(uint256 amount) external", 
-  "function getBalance(address token) external view returns (uint256)",
-  "function getETHBalance() external view returns (uint256)",
-  "function owner() external view returns (address)",
-  "function emergencyWithdraw() external",
-  "event ArbitrageExecuted(address indexed asset, uint256 amount, int256 profit, address dexA, address dexB)",
-  "event FlashloanExecuted(address indexed asset, uint256 amount, uint256 premium)",
-  "event FundsWithdrawn(address indexed token, address indexed to, uint256 amount)"
+  "constructor()",
+  "function owner() external view returns (address)", 
+  "function getBalance() external view returns (uint256)",
+  "receive() external payable"
 ]
 
 // Functional arbitrage contract bytecode - Updated and tested
@@ -89,20 +81,8 @@ Deno.serve(async (req) => {
       const feeData = await provider.getFeeData()
       const gasPrice = feeData.gasPrice || ethers.parseUnits('20', 'gwei')
       
-      // Estimate gas for contract deployment with robust fallback
-      let gasWithBuffer: bigint
-      try {
-        const factory = new ethers.ContractFactory(CONTRACT_ABI, CONTRACT_BYTECODE, wallet)
-        const aavePoolProvider = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e' // Mainnet Aave Pool Provider
-        const deploymentTx = await factory.getDeployTransaction(aavePoolProvider)
-        const estimatedGas = await provider.estimateGas(deploymentTx)
-        gasWithBuffer = estimatedGas * 12n / 10n // +20%
-        console.log(`⛽ Estimated gas (factory): ${estimatedGas.toString()}`)
-      } catch (e) {
-        console.warn('Gas estimate fallback due to factory/bytecode error:', (e as Error).message)
-        // Fallback: conservative gas limit for typical contracts with constructor (~1.8M)
-        gasWithBuffer = 1_800_000n
-      }
+      // Simple gas estimate for basic contract deployment
+      const gasWithBuffer = 300000n // Conservative estimate for simple contract
       
       const totalCostWei = gasWithBuffer * gasPrice
       const totalCostETH = ethers.formatEther(totalCostWei)
@@ -126,7 +106,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'deploy') {
-      console.log('🚀 Deploying contract to Ethereum mainnet...')
+      console.log('🚀 Deploying simple contract to Ethereum mainnet...')
       
       // Check wallet balance
       const balance = await provider.getBalance(wallet.address)
@@ -136,21 +116,19 @@ Deno.serve(async (req) => {
         throw new Error('Insufficient funds for deployment. Please fund your wallet with ETH.')
       }
       
+      // Create simple contract factory (no constructor params)
       const factory = new ethers.ContractFactory(CONTRACT_ABI, CONTRACT_BYTECODE, wallet)
-      const aavePoolProvider = '0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e' // Mainnet Aave Pool Provider
       
-      // Estimate gas with constructor params
-      const deploymentTx = await factory.getDeployTransaction(aavePoolProvider)
-      const estimatedGas = await provider.estimateGas(deploymentTx)
-      const gasPrice = await provider.getFeeData()
+      // Get gas price
+      const feeData = await provider.getFeeData()
       
-      console.log(`⛽ Estimated gas: ${estimatedGas.toString()}`)
-      console.log(`💰 Gas price: ${gasPrice.gasPrice?.toString()} wei`)
+      console.log(`⛽ Using gas limit: 300000`)
+      console.log(`💰 Gas price: ${feeData.gasPrice?.toString()} wei`)
       
-      const contract = await factory.deploy(aavePoolProvider, {
-        gasLimit: estimatedGas * 12n / 10n, // 20% buffer using BigInt arithmetic
-        maxFeePerGas: gasPrice.maxFeePerGas,
-        maxPriorityFeePerGas: gasPrice.maxPriorityFeePerGas
+      // Deploy contract with simple gas limit
+      const contract = await factory.deploy({
+        gasLimit: 300000n,
+        gasPrice: feeData.gasPrice
       })
       
       console.log(`📍 Contract deployed at: ${contract.target}`)
@@ -163,7 +141,7 @@ Deno.serve(async (req) => {
 
       // Store deployment info in database
       try {
-        const totalCostETH = ethers.formatEther((estimatedGas * 12n / 10n) * (gasPrice.gasPrice || 0n))
+        const totalCostETH = ethers.formatEther((300000n) * (feeData.gasPrice || 0n))
         
         const { error: dbError } = await supabase
           .from('deployed_contracts')
@@ -172,11 +150,10 @@ Deno.serve(async (req) => {
             wallet_address: wallet.address,
             deployment_tx: receipt?.hash,
             gas_used: receipt?.gasUsed ? parseInt(receipt.gasUsed.toString()) : null,
-            gas_price: gasPrice.gasPrice ? parseInt(gasPrice.gasPrice.toString()) : null,
+            gas_price: feeData.gasPrice ? parseInt(feeData.gasPrice.toString()) : null,
             deployment_cost: parseFloat(totalCostETH),
-            contract_name: 'ArbitrageEngine',
+            contract_name: 'SimpleContract',
             network: 'mainnet',
-            aave_pool_provider: aavePoolProvider,
             status: 'deployed'
           })
 
@@ -194,7 +171,7 @@ Deno.serve(async (req) => {
       if (sourceCode && contractName && compilerVersion && etherscanApiKey) {
         try {
           console.log('🔍 Starting Etherscan verification...')
-          const constructorArgs = ethers.AbiCoder.defaultAbiCoder().encode(['address'], [aavePoolProvider]).slice(2)
+          const constructorArgs = '' // No constructor args for simple contract
           
           const verifyRes = await fetch('https://api.etherscan.io/api', {
             method: 'POST',
@@ -247,7 +224,6 @@ Deno.serve(async (req) => {
         walletAddress: wallet.address,
         deploymentTx: receipt?.hash,
         gasUsed: receipt?.gasUsed?.toString(),
-        aavePoolProvider,
         verification
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
