@@ -27,7 +27,7 @@ export function DeployContractModal({ open, onClose, onDeploy, isDeploying }: De
     if (open && !costs && !isEstimating) {
       estimateCosts();
     }
-  }, [open]);
+  }, [open, costs, isEstimating]);
 
   const estimateCosts = async () => {
     setIsEstimating(true);
@@ -59,7 +59,7 @@ export function DeployContractModal({ open, onClose, onDeploy, isDeploying }: De
         <DialogHeader>
           <DialogTitle>Deploy Arbitrage Contract</DialogTitle>
           <DialogDescription>
-            Ready to deploy your pre-configured arbitrage contract with automatic Etherscan verification.
+            Ready to deploy your pre-configured arbitrage contract to Base mainnet with optional BaseScan verification.
           </DialogDescription>
         </DialogHeader>
 

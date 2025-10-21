@@ -56,20 +56,23 @@ Deno.serve(async (req) => {
     const { action, sourceCode, contractName, compilerVersion, optimizationUsed, runs } = body
 
     // Get private key from Supabase secrets
-    const privateKey = Deno.env.get('PRIVATE_KEY')
-    const alchemyUrl = Deno.env.get('ALCHEMY_API_URL_MAINNET')
-    const etherscanApiKey = Deno.env.get('ETHERSCAN_API_KEY')
+  const privateKey = Deno.env.get('PRIVATE_KEY')
+  const baseRpcUrl = Deno.env.get('BASE_RPC_URL')
+  const basescanApiKey = Deno.env.get('BASESCAN_API_KEY')
+  const remoteSignerUrl = Deno.env.get('REMOTE_SIGNER_URL')
+  const secretConfirmation = Deno.env.get('SECRET_CONFIRMATION')
+  const maxGasLimit = BigInt(Deno.env.get('MAX_GAS_LIMIT') ?? '2000000')
 
     if (!privateKey) {
       throw new Error('Private key not configured in Supabase secrets')
     }
 
-    if (!alchemyUrl) {
-      throw new Error('Alchemy URL not configured in Supabase secrets')
+    if (!baseRpcUrl) {
+      throw new Error('BASE_RPC_URL not configured in Supabase secrets')
     }
 
-    console.log('🔗 Connecting to Ethereum mainnet via Alchemy...')
-    const provider = new ethers.JsonRpcProvider(alchemyUrl)
+    console.log('🔗 Connecting to Base mainnet RPC...')
+    const provider = new ethers.JsonRpcProvider(baseRpcUrl)
     const wallet = new ethers.Wallet(privateKey, provider)
     
     console.log(`👛 Wallet address: ${wallet.address}`)
@@ -118,30 +121,71 @@ Deno.serve(async (req) => {
       
       // Create simple contract factory (no constructor params)
       const factory = new ethers.ContractFactory(CONTRACT_ABI, CONTRACT_BYTECODE, wallet)
-      
-      // Get gas price
+
+  // Build deployment transaction but support remote signer if configured
+  const deployTx = factory.getDeployTransaction() as ethers.TransactionRequest
+
+      // Estimate gas for deployment
+      let gasEstimate = 300000n
+      try {
+        const est = await provider.estimateGas(deployTx)
+        gasEstimate = BigInt(est.toString())
+      } catch (_) {
+        // fallback to default
+        gasEstimate = 300000n
+      }
+
+      if (gasEstimate > maxGasLimit) {
+        throw new Error(`Deployment gas estimate ${gasEstimate.toString()} exceeds MAX_GAS_LIMIT`)
+      }
+
       const feeData = await provider.getFeeData()
-      
-      console.log(`⛽ Using gas limit: 300000`)
-      console.log(`💰 Gas price: ${feeData.gasPrice?.toString()} wei`)
-      
-      // Deploy contract with simple gas limit
-      const contract = await factory.deploy({
-        gasLimit: 300000n,
-        gasPrice: feeData.gasPrice
-      })
-      
-      console.log(`📍 Contract deployed at: ${contract.target}`)
-      console.log(`🔗 Waiting for confirmation...`)
-      
-      const receipt = await contract.deploymentTransaction()?.wait()
-      console.log(`✅ Contract confirmed in block: ${receipt?.blockNumber}`)
-      
-      const contractAddress = await contract.getAddress()
+
+  let contractAddress: string | undefined
+  let receipt: ethers.TransactionReceipt | null = null
+
+      if (remoteSignerUrl) {
+        if (!secretConfirmation) throw new Error('SECRET_CONFIRMATION required to use remote signer for deployment')
+
+        // Populate deploy tx fields
+  deployTx.gasLimit = gasEstimate
+  deployTx.gasPrice = feeData.gasPrice || undefined
+
+        // Send to remote signer for signing
+        const signRes = await fetch(remoteSignerUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tx: deployTx, secretConfirmation })
+        })
+
+        const signJson = await signRes.json()
+        if (!signJson.signedTx) throw new Error('Remote signer did not return signedTx')
+
+        const sent = await provider.sendTransaction(signJson.signedTx)
+        receipt = await sent.wait()
+        contractAddress = receipt.contractAddress || sent.hash // provider returns contractAddress in receipt
+      } else {
+        // Local wallet deploy
+        console.log(`⛽ Using gas limit: ${gasEstimate.toString()}`)
+        console.log(`💰 Gas price: ${feeData.gasPrice?.toString()} wei`)
+
+        const contract = await factory.deploy({
+          gasLimit: gasEstimate,
+          gasPrice: feeData.gasPrice
+        })
+
+        console.log(`📍 Contract deployed at: ${contract.target}`)
+        console.log(`🔗 Waiting for confirmation...`)
+
+        receipt = await contract.deploymentTransaction()?.wait()
+        console.log(`✅ Contract confirmed in block: ${receipt?.blockNumber}`)
+
+        contractAddress = await contract.getAddress()
+      }
 
       // Store deployment info in database
       try {
-        const totalCostETH = ethers.formatEther((300000n) * (feeData.gasPrice || 0n))
+  const totalCostETH = ethers.formatEther((300000n) * (feeData.gasPrice || 0n))
         
         const { error: dbError } = await supabase
           .from('deployed_contracts')
@@ -153,7 +197,7 @@ Deno.serve(async (req) => {
             gas_price: feeData.gasPrice ? parseInt(feeData.gasPrice.toString()) : null,
             deployment_cost: parseFloat(totalCostETH),
             contract_name: 'SimpleContract',
-            network: 'mainnet',
+            network: 'base',
             status: 'deployed'
           })
 
@@ -166,18 +210,20 @@ Deno.serve(async (req) => {
         console.error('Failed to store in database:', e)
       }
 
-      // Optional: Verify and publish on Etherscan if source is provided
+  // Optional: Verify and publish on BaseScan if source is provided
       let verification: { submitted: boolean; status?: string; message?: string; url?: string } = { submitted: false }
-      if (sourceCode && contractName && compilerVersion && etherscanApiKey) {
+      // If source code & BaseScan API key are provided, submit verification to BaseScan
+      if (sourceCode && contractName && compilerVersion && basescanApiKey) {
         try {
-          console.log('🔍 Starting Etherscan verification...')
+          console.log('🔍 Starting BaseScan verification...')
           const constructorArgs = '' // No constructor args for simple contract
-          
-          const verifyRes = await fetch('https://api.etherscan.io/api', {
+
+          // BaseScan exposes an Etherscan-compatible API surface in many cases. Use POST to submit source for verification.
+          const verifyRes = await fetch('https://api.basescan.org/api', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
-              apikey: etherscanApiKey,
+              apikey: basescanApiKey,
               module: 'contract',
               action: 'verifysourcecode',
               contractaddress: contractAddress,
@@ -190,22 +236,55 @@ Deno.serve(async (req) => {
               constructorArguements: constructorArgs
             })
           })
-          
+
           const verifyJson = await verifyRes.json()
           if (verifyJson.status === '1') {
             const guid = verifyJson.result
             console.log(`📋 Verification GUID: ${guid}`)
-            
-            // Check verification status (simplified - just check once after 30 seconds)
+
+            // Persist verification GUID to the deployed_contracts table for auditing
+            try {
+              const { error: verError } = await supabase
+                .from('deployed_contracts')
+                .update({ verification_guid: guid, verification_status: 'submitted' })
+                .eq('contract_address', contractAddress)
+
+              if (verError) console.error('Failed to persist verification GUID:', verError)
+            } catch (e) {
+              console.error('Error persisting verification GUID:', e)
+            }
+
+            // Poll verification status once after a short delay (can be improved to poll until final)
             await new Promise((r) => setTimeout(r, 30000))
-            const chkRes = await fetch(`https://api.etherscan.io/api?module=contract&action=checkverifystatus&guid=${guid}&apikey=${etherscanApiKey}`)
+            const chkRes = await fetch(`https://api.basescan.org/api?module=contract&action=checkverifystatus&guid=${guid}&apikey=${basescanApiKey}`)
             const chkJson = await chkRes.json()
-            
+
             if (chkJson.status === '1') {
-              verification = { submitted: true, status: 'Success', url: `https://etherscan.io/address/${contractAddress}#code` }
-              console.log('✅ Contract verified on Etherscan!')
+              verification = { submitted: true, status: 'Success', url: `https://basescan.org/address/${contractAddress}#code` }
+              // Update db with success and url
+              try {
+                const { error: verUpdateErr } = await supabase
+                  .from('deployed_contracts')
+                  .update({ verification_status: 'verified', verification_url: `https://basescan.org/address/${contractAddress}#code` })
+                  .eq('contract_address', contractAddress)
+
+                if (verUpdateErr) console.error('Failed to update verification status:', verUpdateErr)
+              } catch (e) {
+                console.error('Error updating verification status:', e)
+              }
+              console.log('✅ Contract verified on BaseScan!')
             } else if (chkJson.status === '0' && typeof chkJson.result === 'string' && chkJson.result.toLowerCase().includes('already verified')) {
-              verification = { submitted: true, status: 'Already Verified', url: `https://etherscan.io/address/${contractAddress}#code` }
+              verification = { submitted: true, status: 'Already Verified', url: `https://basescan.org/address/${contractAddress}#code` }
+              try {
+                const { error: verUpdateErr } = await supabase
+                  .from('deployed_contracts')
+                  .update({ verification_status: 'already_verified', verification_url: `https://basescan.org/address/${contractAddress}#code` })
+                  .eq('contract_address', contractAddress)
+
+                if (verUpdateErr) console.error('Failed to update verification status:', verUpdateErr)
+              } catch (e) {
+                console.error('Error updating verification status:', e)
+              }
             } else {
               verification = { submitted: true, status: 'Pending', message: 'Verification in progress' }
             }
@@ -234,7 +313,7 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error('Deployment error:', error)
-    const message = (error as any)?.message || String(error)
+  const message = error instanceof Error ? error.message : String(error)
     let status = 500
     
     // Handle specific error types

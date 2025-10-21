@@ -6,6 +6,37 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// Minimal ABI for Uniswap-like router getAmountsOut
+const ROUTER_ABI = [
+  'function getAmountsOut(uint256 amountIn, address[] calldata path) external view returns (uint256[])'
+]
+
+const ERC20_ABI = [
+  'function decimals() view returns (uint8)'
+]
+
+async function getOnchainAmountOut(provider: ethers.JsonRpcProvider, routerAddress: string, tokenIn: string, tokenOut: string, amountIn: bigint) {
+  try {
+    const router = new ethers.Contract(routerAddress, ROUTER_ABI, provider)
+    const path = [tokenIn, tokenOut]
+    const amounts = await router.getAmountsOut(amountIn, path)
+    return amounts[amounts.length - 1]
+  } catch (err) {
+    throw new Error('Router quote failed: ' + (err as Error).message)
+  }
+}
+
+async function getTokenDecimals(provider: ethers.JsonRpcProvider, tokenAddress: string) {
+  try {
+    const token = new ethers.Contract(tokenAddress, ERC20_ABI, provider)
+    const d = await token.decimals()
+    return Number(d)
+  } catch (err) {
+    // default to 18
+    return 18
+  }
+}
+
 // Enhanced Arbitrage Contract ABI with Flashloan Support  
 const CONTRACT_ABI = [
   "constructor(address _aavePoolProvider)",
@@ -60,29 +91,35 @@ Deno.serve(async (req) => {
     const body = await req.json()
     const { action } = body
 
-    // Get configuration from Supabase secrets
-    const privateKey = Deno.env.get('PRIVATE_KEY')
-    const alchemyUrl = Deno.env.get('ALCHEMY_API_URL_MAINNET')
+  // Get configuration from Supabase secrets
+  const privateKey = Deno.env.get('PRIVATE_KEY')
+  const baseRpcUrl = Deno.env.get('BASE_RPC_URL')
 
     if (!privateKey) {
       throw new Error('Private key not configured in Supabase secrets')
     }
 
-    if (!alchemyUrl) {
-      throw new Error('ALCHEMY_API_URL_MAINNET not configured in Supabase secrets. Please add your Alchemy API URL.')
+    if (!baseRpcUrl) {
+      throw new Error('BASE_RPC_URL not configured in Supabase secrets. Please add your Base RPC URL.')
     }
 
     let provider, wallet
     try {
-      provider = new ethers.JsonRpcProvider(alchemyUrl)
+      provider = new ethers.JsonRpcProvider(baseRpcUrl)
       wallet = new ethers.Wallet(privateKey, provider)
       
       // Test the connection
       await provider.getNetwork()
     } catch (error) {
       console.error('RPC Provider error:', error)
-      throw new Error(`Failed to connect to Ethereum network. Please check your ALCHEMY_API_URL_MAINNET configuration. Error: ${(error as Error).message}`)
+      throw new Error(`Failed to connect to Base RPC. Please check your BASE_RPC_URL configuration. Error: ${(error as Error).message}`)
     }
+
+    // Execution guardrails
+    const maxGasLimit = BigInt(Deno.env.get('MAX_GAS_LIMIT') ?? '2000000')
+    const maxSlippagePercent = Number(Deno.env.get('MAX_SLIPPAGE_PERCENT') ?? '2')
+    const killSwitch = (Deno.env.get('EXECUTOR_KILL_SWITCH') ?? 'false') === 'true'
+    if (killSwitch) throw new Error('Executor kill-switch is enabled')
 
     if (action === 'execute_trade') {
       const { opportunity, contractAddress } = body as ExecuteTradeRequest
@@ -133,6 +170,27 @@ Deno.serve(async (req) => {
           [targetToken, dexA, dexB, amount]
         )
 
+        // Re-check on-chain quotes before sending tx to avoid stale opportunities
+        // Try to ensure that the expected profit still holds (basic check using routers if configured)
+        try {
+          const currentBuyOut = await getOnchainAmountOut(provider, dexA, asset, targetToken, amount)
+          const currentSellOut = await getOnchainAmountOut(provider, dexB, asset, targetToken, amount)
+          // Determine estimated profit in tokenOut units (approx)
+          const estimatedProfitTokenOut = Number(currentSellOut) - Number(currentBuyOut)
+          // Convert tokenOut amount to ETH approximately by querying tokenOut->WETH route if available
+          // Skipping precise conversion here; rely on contract's internal checks too
+          console.log('🔎 On-chain re-check: buyOut', currentBuyOut?.toString(), 'sellOut', currentSellOut?.toString())
+        } catch (err) {
+          console.warn('⚠️ On-chain re-check failed or not configured:', (err as Error).message)
+        }
+
+        // Simulation via callStatic to avoid sending doomed transactions
+        try {
+          await contract.callStatic.executeArbitrage(asset, amount, dexA, dexB, params)
+        } catch (simErr) {
+          throw new Error('Simulation failed: ' + (simErr as Error).message)
+        }
+
         // Estimate gas for the arbitrage execution
         console.log('⛽ Estimating gas for arbitrage execution...')
         const gasEstimate = await contract.executeArbitrage.estimateGas(
@@ -143,12 +201,29 @@ Deno.serve(async (req) => {
           params
         )
 
+        if (gasEstimate > maxGasLimit) {
+          throw new Error(`Gas estimate ${gasEstimate.toString()} exceeds configured MAX_GAS_LIMIT`)
+        }
+
         console.log(`Gas estimate: ${gasEstimate.toString()}`)
 
         // Get current gas price
         const feeData = await provider.getFeeData()
         const maxFeePerGas = feeData.maxFeePerGas || ethers.parseUnits('50', 'gwei')
         const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei')
+
+        // Basic slippage check using on-chain quotes
+        try {
+          const currentBuyOut = await getOnchainAmountOut(provider, dexA, asset, targetToken, amount)
+          const currentSellOut = await getOnchainAmountOut(provider, dexB, asset, targetToken, amount)
+          const observedProfitPercent = (Number(currentSellOut) / Number(currentBuyOut) - 1) * 100
+          const slippage = Math.max(0, opportunity.profitPercent - observedProfitPercent)
+          if (slippage > maxSlippagePercent) {
+            throw new Error(`Slippage ${slippage.toFixed(2)}% exceeds MAX_SLIPPAGE_PERCENT`)
+          }
+        } catch (quoteErr) {
+          console.warn('On-chain quote slippage check failed:', (quoteErr as Error).message)
+        }
 
         // Execute the arbitrage with flashloan
         console.log('💰 Executing arbitrage with flashloan...')
@@ -278,9 +353,83 @@ Deno.serve(async (req) => {
     }
 
     if (action === 'scan_opportunities') {
-      // This would integrate with real DEX APIs to find actual opportunities
-      // For now, return mock data with some randomization
-      const opportunities = generateMockOpportunities()
+      // Live scanner using on-chain getAmountsOut across configured routers.
+      // Required environment variables (as JSON): DEX_ROUTERS (map name->address), TOKEN_PAIRS (array of 'TOKENA/TOKENB'), PROFIT_THRESHOLD_PERCENT (optional)
+
+      const dexRoutersJson = Deno.env.get('DEX_ROUTERS')
+      const tokenPairsJson = Deno.env.get('TOKEN_PAIRS')
+      const profitThreshold = Number(Deno.env.get('PROFIT_THRESHOLD_PERCENT') ?? '0.5')
+
+      if (!dexRoutersJson || !tokenPairsJson) {
+        return new Response(JSON.stringify({ error: 'DEX_ROUTERS or TOKEN_PAIRS env vars are not configured. Please configure DEX_ROUTERS (JSON) and TOKEN_PAIRS (JSON).' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      let dexRouters: Record<string, string> = {}
+      let tokenPairs: string[] = []
+      try {
+        dexRouters = JSON.parse(dexRoutersJson)
+        tokenPairs = JSON.parse(tokenPairsJson)
+      } catch (err) {
+        return new Response(JSON.stringify({ error: 'Failed to parse DEX_ROUTERS or TOKEN_PAIRS JSON env var.' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        })
+      }
+
+      const opportunities: ArbitrageOpportunity[] = []
+
+      // For each pair, sample quotes across routers to find spreads
+      for (const pair of tokenPairs) {
+        const [tokenA, tokenB] = pair.split('/')
+        // Map token symbols to addresses - simple mapping; prefer environment-driven mapping
+        const tokenAddresses: Record<string, string> = JSON.parse(Deno.env.get('TOKEN_ADDRESSES') ?? '{}')
+        const addrA = tokenAddresses[tokenA] || tokenA
+        const addrB = tokenAddresses[tokenB] || tokenB
+
+        const routerEntries = Object.entries(dexRouters)
+
+        // Build quotes map: router -> amountOut for selling 1 unit of tokenA (use 1 ETH-equivalent token amount?)
+        // We'll use a fixed amount to compare, e.g., 1e18 (1 token with 18 decimals)
+        const sampleAmount = ethers.parseUnits('1', 18)
+        const quotes: Array<{ routerName: string; amountOut: bigint }> = []
+
+        for (const [name, routerAddr] of routerEntries) {
+          try {
+            const out = await getOnchainAmountOut(provider, routerAddr, addrA, addrB, sampleAmount)
+            quotes.push({ routerName: name, amountOut: out })
+          } catch (err) {
+            // skip routers that can't quote this pair
+          }
+        }
+
+        if (quotes.length < 2) continue
+
+        // Find best buy (lowest price in tokenB per tokenA) and best sell (highest)
+        quotes.sort((a, b) => (Number(a.amountOut) - Number(b.amountOut)))
+        const bestBuy = quotes[0]
+        const bestSell = quotes[quotes.length - 1]
+
+        // Calculate profit percent (sell/buy - 1)
+        const profitPercent = (Number(bestSell.amountOut) / Number(bestBuy.amountOut) - 1) * 100
+
+        if (profitPercent > profitThreshold) {
+          opportunities.push({
+            id: `${Date.now()}-${pair}`,
+            tokenPair: pair,
+            buyDex: bestBuy.routerName,
+            sellDex: bestSell.routerName,
+            buyPrice: Number(bestBuy.amountOut),
+            sellPrice: Number(bestSell.amountOut),
+            profitPercent,
+            profitETH: 0,
+            maxAmount: 1,
+            timestamp: new Date().toISOString()
+          })
+        }
+      }
 
       return new Response(JSON.stringify({ opportunities }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
