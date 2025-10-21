@@ -146,40 +146,12 @@ Deno.serve(async (req: Request) => {
 
     const feeData = await provider.getFeeData()
 
-    // If remote signer is configured, populate the unsigned tx and POST it to the remote signer for signing
-  let receipt: ethers.TransactionReceipt | null = null
-  let txHash: string | undefined
-    if (remoteSignerUrl) {
-      if (!secretConfirmation) {
-        return new Response(JSON.stringify({ error: 'SECRET_CONFIRMATION required to use remote signer' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      }
-
-      const populated = await contract.populateTransaction.executeArbitrage(assetAddr, amount, top.buy.addr, top.sell.addr, params)
-      populated.to = deployedContract
-      populated.gasLimit = gasEstimate * 130n / 100n
-      populated.maxFeePerGas = feeData.maxFeePerGas
-      populated.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas
-
-      const signRes = await fetch(remoteSignerUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tx: populated, secretConfirmation })
-      })
-
-      const signJson = await signRes.json()
-      if (!signJson.signedTx) {
-        return new Response(JSON.stringify({ error: 'Remote signer did not return signedTx' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
-      }
-
-  const txResp = await provider.sendTransaction(signJson.signedTx)
-  receipt = await txResp.wait()
-  txHash = txResp.hash
-
-    } else {
-      const tx = await contract.executeArbitrage(assetAddr, amount, top.buy.addr, top.sell.addr, params, { gasLimit: gasEstimate * 130n / 100n, maxFeePerGas: feeData.maxFeePerGas, maxPriorityFeePerGas: feeData.maxPriorityFeePerGas })
-      txHash = tx.hash
-      receipt = await tx.wait()
-    }
+    // Execute locally with wallet
+    let receipt: ethers.TransactionReceipt | null = null
+    let txHash: string | undefined
+    const tx = await contract.executeArbitrage(assetAddr, amount, top.buy.addr, top.sell.addr, params, { gasLimit: gasEstimate * 130n / 100n, maxFeePerGas: feeData.maxFeePerGas, maxPriorityFeePerGas: feeData.maxPriorityFeePerGas })
+    txHash = tx.hash
+    receipt = await tx.wait()
 
     // Store execution record
     try {
