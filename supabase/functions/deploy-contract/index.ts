@@ -144,44 +144,22 @@ Deno.serve(async (req) => {
   let contractAddress: string | undefined
   let receipt: ethers.TransactionReceipt | null = null
 
-      if (remoteSignerUrl) {
-        if (!secretConfirmation) throw new Error('SECRET_CONFIRMATION required to use remote signer for deployment')
+      // Use local wallet to sign and deploy (signing in-project per request)
+      console.log(`⛽ Using gas limit: ${gasEstimate.toString()}`)
+      console.log(`💰 Gas price: ${feeData.gasPrice?.toString()} wei`)
 
-        // Populate deploy tx fields
-  deployTx.gasLimit = gasEstimate
-  deployTx.gasPrice = feeData.gasPrice || undefined
+      const contract = await factory.deploy({
+        gasLimit: gasEstimate,
+        gasPrice: feeData.gasPrice
+      })
 
-        // Send to remote signer for signing
-        const signRes = await fetch(remoteSignerUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tx: deployTx, secretConfirmation })
-        })
+      console.log(`📍 Contract deployed at: ${contract.target}`)
+      console.log(`🔗 Waiting for confirmation...`)
 
-        const signJson = await signRes.json()
-        if (!signJson.signedTx) throw new Error('Remote signer did not return signedTx')
+      receipt = await contract.deploymentTransaction()?.wait()
+      console.log(`✅ Contract confirmed in block: ${receipt?.blockNumber}`)
 
-        const sent = await provider.sendTransaction(signJson.signedTx)
-        receipt = await sent.wait()
-        contractAddress = receipt.contractAddress || sent.hash // provider returns contractAddress in receipt
-      } else {
-        // Local wallet deploy
-        console.log(`⛽ Using gas limit: ${gasEstimate.toString()}`)
-        console.log(`💰 Gas price: ${feeData.gasPrice?.toString()} wei`)
-
-        const contract = await factory.deploy({
-          gasLimit: gasEstimate,
-          gasPrice: feeData.gasPrice
-        })
-
-        console.log(`📍 Contract deployed at: ${contract.target}`)
-        console.log(`🔗 Waiting for confirmation...`)
-
-        receipt = await contract.deploymentTransaction()?.wait()
-        console.log(`✅ Contract confirmed in block: ${receipt?.blockNumber}`)
-
-        contractAddress = await contract.getAddress()
-      }
+      contractAddress = await contract.getAddress()
 
       // Store deployment info in database
       try {
@@ -223,17 +201,17 @@ Deno.serve(async (req) => {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({
-              apikey: basescanApiKey,
+              apikey: String(basescanApiKey ?? ''),
               module: 'contract',
               action: 'verifysourcecode',
-              contractaddress: contractAddress,
-              sourceCode: sourceCode,
+              contractaddress: String(contractAddress ?? ''),
+              sourceCode: String(sourceCode ?? ''),
               codeformat: 'solidity-single-file',
-              contractname: contractName,
-              compilerversion: compilerVersion,
+              contractname: String(contractName ?? ''),
+              compilerversion: String(compilerVersion ?? ''),
               optimizationUsed: (optimizationUsed ? '1' : '0'),
               runs: String(runs ?? 200),
-              constructorArguements: constructorArgs
+              constructorArguements: String(constructorArgs)
             })
           })
 
